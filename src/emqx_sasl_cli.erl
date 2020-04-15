@@ -14,7 +14,7 @@
 %% limitations under the License.
 %%--------------------------------------------------------------------
 
--module(emqx_auth_sasl_cli).
+-module(emqx_sasl_cli).
 
 -include("emqx_sasl.hrl").
 
@@ -30,11 +30,14 @@ load() ->
 unload() ->
     emqx_ctl:unregister_command(sasl).
 
-cli(["sasl", "scram", "add", Username, Password, Salt]) ->
-    cli(["sasl", "scram", "add", Username, Password, Salt, 4096]);
-cli(["sasl", "scram", "add", Username, Password, Salt, IterationCount]) ->
+cli(["scram", "add", Username, Password, Salt]) ->
+    cli(["scram", "add", Username, Password, Salt, "4096"]);
+cli(["scram", "add", Username, Password, Salt, IterationCount]) ->
     execute_when_enabled("scram", fun() ->
-        case emqx_sasl_scram:add(Username, Password, Salt, IterationCount) of
+        case emqx_sasl_scram:add(list_to_binary(Username),
+                                 list_to_binary(Password),
+                                 list_to_binary(Salt),
+                                 list_to_integer(IterationCount)) of
             ok ->
                 emqx_ctl:print("Authentication information added successfully~n");
             {error, already_existed} ->
@@ -42,17 +45,21 @@ cli(["sasl", "scram", "add", Username, Password, Salt, IterationCount]) ->
         end
     end);
 
-cli(["sasl", "scram", "delete", Username]) ->
+cli(["scram", "delete", Username0]) ->
+    Username = list_to_binary(Username0),
     execute_when_enabled("scram", fun() ->
         ok = emqx_sasl_scram:delete(Username),
         emqx_ctl:print("Authentication information deleted successfully~n")
     end);
 
-cli(["sasl", "scram", "update", Username, Password, Salt]) ->
-    cli(["sasl", "scram", "update", Username, Password, Salt, 4096]); 
-cli(["sasl", "scram", "update", Username, Password, Salt, IterationCount]) ->
+cli(["scram", "update", Username, Password, Salt]) ->
+    cli(["scram", "update", Username, Password, Salt, "4096"]); 
+cli(["scram", "update", Username, Password, Salt, IterationCount]) ->
     execute_when_enabled("scram", fun() ->
-        case emqx_sasl_scram:update(Username, Password, Salt, IterationCount) of
+        case emqx_sasl_scram:update(list_to_binary(Username),
+                                    list_to_binary(Password),
+                                    list_to_binary(Salt),
+                                    list_to_integer(IterationCount)) of
             ok ->
                 emqx_ctl:print("Authentication information updated successfully~n");
             {error, not_found} ->
@@ -60,15 +67,20 @@ cli(["sasl", "scram", "update", Username, Password, Salt, IterationCount]) ->
         end
     end);
 
-cli(["sasl", "scram", "lookup", Username]) ->
+cli(["scram", "lookup", Username0]) ->
+    Username = list_to_binary(Username0),
     execute_when_enabled("scram", fun() ->
-        {ok, #{username := Username,
-               stored_key := StoredKey,
-               server_key := ServerKey,
-               salt := Salt,
-               iteration_count := IterationCount}} = emqx_sasl_scram:lookup(Username),
-        emqx_ctl:print("Username: ~p, Stored Key: ~p, Server Key: ~p, Salt: ~p, Iteration Count: ~p~n",
-                        [Username, StoredKey, ServerKey, base64:encode(Salt), IterationCount])
+        case emqx_sasl_scram:lookup(Username) of
+            {ok, #{username := Username,
+                   stored_key := StoredKey,
+                   server_key := ServerKey,
+                   salt := Salt,
+                   iteration_count := IterationCount}} ->
+                emqx_ctl:print("Username: ~s, Stored Key: ~s, Server Key: ~s, Salt: ~s, Iteration Count: ~p~n",
+                                [Username, StoredKey, ServerKey, Salt, IterationCount]);
+            {error, not_found} ->
+                emqx_ctl:print("Authentication information not found~n")
+        end
     end);
 
 cli(_) ->

@@ -16,7 +16,8 @@
 
 -module(emqx_sasl).
 
--export([ check/3
+-export([ init/0
+        , check/3
         , supported/0
         ]).
 

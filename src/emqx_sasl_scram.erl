@@ -14,7 +14,7 @@
 %% limitations under the License.
 %%--------------------------------------------------------------------
 
--module(emqx_auth_sasl_scram).
+-module(emqx_sasl_scram).
 
 -include("emqx_sasl.hrl").
 
@@ -64,7 +64,7 @@ update(Username, Password, Salt, IterationCount) ->
     end.
 
 delete(Username) ->
-    mnesia:delete(?SCRAM_AUTH_TAB, Username, write).
+    ret(mnesia:transaction(fun mnesia:delete/3, [?SCRAM_AUTH_TAB, Username, write])).
 
 lookup(Username) ->
     case mnesia:dirty_read(?SCRAM_AUTH_TAB, Username) of
@@ -87,11 +87,15 @@ do_add(Username, Password, Salt, IterationCount) ->
     ClientKey = client_key(SaltedPassword),
     ServerKey = server_key(SaltedPassword),
     StoredKey = crypto:hash(sha, ClientKey),
-    mnesia:write(?SCRAM_AUTH_TAB, #scram_auth{username = Username,
-                                              stored_key = StoredKey,
-                                              server_key = ServerKey,
-                                              salt = Salt,
-                                              iteration_count = IterationCount}, write).
+    AuthInfo = #scram_auth{username = Username,
+                           stored_key = base64:encode(StoredKey),
+                           server_key = base64:encode(ServerKey),
+                           salt = base64:encode(Salt),
+                           iteration_count = IterationCount},
+    ret(mnesia:transaction(fun mnesia:write/3, [?SCRAM_AUTH_TAB, AuthInfo, write])).
+
+ret({atomic, ok})     -> ok;
+ret({aborted, Error}) -> {error, Error}.
 
 check(Data, Cache) when map_size(Cache) =:= 0 ->
     check_client_first(Data);
@@ -106,10 +110,13 @@ check_client_first(ClientFirst) ->
     case lookup(Username) of
         {error, not_found} ->
             {error, not_found};
-        {ok, #{stored_key := StoredKey,
-               server_key := ServerKey,
-               salt := Salt,
+        {ok, #{stored_key := StoredKey0,
+               server_key := ServerKey0,
+               salt := Salt0,
                iteration_count := IterationCount}} ->
+            StoredKey = base64:decode(StoredKey0), 
+            ServerKey = base64:decode(ServerKey0),
+            Salt = base64:decode(Salt0),
             ServerNonce = nonce(),
             Nonce = list_to_binary(binary_to_list(ClientNonce) ++ binary_to_list(ServerNonce)),
             ServerFirst = make_server_first(Nonce, Salt, IterationCount),

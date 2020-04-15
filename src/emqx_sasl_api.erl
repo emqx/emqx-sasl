@@ -14,19 +14,13 @@
 %% limitations under the License.
 %%--------------------------------------------------------------------
 
--module(emqx_auth_sasl_api).
+-module(emqx_sasl_api).
 
 -include("emqx_sasl.hrl").
 
 -import(minirest, [ return/0
                   , return/1
                   ]).
-
--rest_api(#{name   => list,
-            method => 'GET',
-            path   => "/sasl",
-            func   => list,
-            descr  => "List all authentication information"}).
 
 -rest_api(#{name   => add,
             method => 'POST',
@@ -40,47 +34,23 @@
             func   => delete,
             descr  => "Delete authentication information"}).
 
--export([ list/2
-        , lookup/2
-        , add/2
+-rest_api(#{name   => update,
+            method => 'PUT',
+            path   => "/sasl",
+            func   => update,
+            descr  => "Update authentication information"}).
+
+-rest_api(#{name   => get,
+            method => 'GET',
+            path   => "/sasl",
+            func   => get,
+            descr  => "Get authentication information"}).
+
+-export([ add/2
         , delete/2
+        , update/2
+        , get/2
         ]).
-
-list(#{mechanism := Mechanism}, _Params) ->
-    case http_uri:decode(Mechanism) of
-        <<"SCRAM-SHA-1">> ->
-            Data = #{Mechanism => mnesia:dirty_all_keys(?SCRAM_AUTH_TAB)},
-            return({ok, Data});
-        _ ->
-            return({error, <<"Unsupported mechanism">>})
-    end;
-
-list(_Bindings, _Params) ->
-    Data = lists:foldl(fun(Mechanism, Acc) ->
-                           case Mechanism of
-                               <<"SCRAM-SHA-1">> ->
-                                   [#{Mechanism => mnesia:dirty_all_keys(?SCRAM_AUTH_TAB)} | Acc]
-                           end
-                       end, [], emqx_sasl:supported()),
-    return({ok, Data}).
-
-lookup(#{mechanism := Mechanism0,
-         username := Username0}, _Params) ->
-    Mechanism = http_uri:decode(Mechanism0),
-    Username = http_uri:decode(Username0),
-    case Mechanism of
-        <<"SCRAM-SHA-1">> ->
-            case emqx_sasl_scram:lookup(Username) of
-                {ok, Data} ->
-                    return({ok, Data});
-                {error, Reason} ->
-                    return({error, Reason})
-            end;
-        _ ->
-            return({error, unsupported_mechanism})
-    end;
-lookup(_Bindings, _Params) ->
-    return({error, missing_required_param}).
 
 add(_Bindings, Params) ->
     case pipeline([fun ensure_required_add_params/1,
@@ -102,6 +72,52 @@ delete(_Bindings, Params) ->
             return({error, Reason})
     end.
 
+update(_Bindings, Params) ->
+    case pipeline([fun ensure_required_add_params/1,
+                   fun validate_params/1,
+                   fun do_update/1], Params) of
+        ok ->
+            return();
+        {error, Reason} ->
+            return({error, Reason})
+    end.
+
+get(Bindings, Params) when is_list(Params) ->
+    get(Bindings, maps:from_list(Params));
+
+get(_Bindings, #{<<"mechanism">> := Mechanism0,
+                 <<"username">> := Username0}) ->
+    Mechanism = http_uri:decode(Mechanism0),
+    Username = http_uri:decode(Username0),
+    case Mechanism of
+        <<"SCRAM-SHA-1">> ->
+            case emqx_sasl_scram:lookup(Username) of
+                {ok, AuthInfo} ->
+                    return({ok, AuthInfo});
+                {error, Reason} ->
+                    return({error, Reason})
+            end;
+        _ ->
+            return({error, unsupported_mechanism})
+    end;
+get(_Bindings, #{<<"mechanism">> := Mechanism}) ->
+    case http_uri:decode(Mechanism) of
+        <<"SCRAM-SHA-1">> ->
+            Data = #{Mechanism => mnesia:dirty_all_keys(?SCRAM_AUTH_TAB)},
+            return({ok, Data});
+        _ ->
+            return({error, <<"Unsupported mechanism">>})
+    end;
+
+get(_Bindings, _Params) ->
+    Data = lists:foldl(fun(Mechanism, Acc) ->
+                           case Mechanism of
+                               <<"SCRAM-SHA-1">> ->
+                                   [#{Mechanism => mnesia:dirty_all_keys(?SCRAM_AUTH_TAB)} | Acc]
+                           end
+                       end, [], emqx_sasl:supported()),
+    return({ok, Data}).
+
 ensure_required_add_params(Params) when is_list(Params) ->
     case proplists:get_value(<<"mechanism">>, Params) of
         undefined ->
@@ -117,6 +133,23 @@ ensure_required_add_params(<<"SCRAM-SHA-1">>, Params) ->
         false -> {missing, missing_required_param}
     end;
 ensure_required_add_params(_, _) ->
+    {error, unsupported_mechanism}.
+
+ensure_required_delete_params(Params) when is_list(Params) ->
+    case proplists:get_value(<<"mechanism">>, Params) of
+        undefined ->
+            {missing, missing_required_param};
+        Mechaism ->
+            ensure_required_delete_params(Mechaism, Params)
+    end.
+
+ensure_required_delete_params(<<"SCRAM-SHA-1">>, Params) ->
+    Required = [<<"username">>],
+    case erlang:map_size(maps:with(Required, maps:from_list(Params))) =:= erlang:length(Required) of
+        true -> ok;
+        false -> {missing, missing_required_param}
+    end;
+ensure_required_delete_params(_, _) ->
     {error, unsupported_mechanism}.
 
 validate_params(Params) ->
@@ -151,27 +184,10 @@ do_add(Params) ->
 do_add(<<"SCRAM-SHA-1">>, Params) ->
     Username = proplists:get_value(<<"username">>, Params),
     Password = proplists:get_value(<<"password">>, Params),
-    Salt = base64:decode(proplists:get_value(<<"salt">>, Params)),
+    Salt = proplists:get_value(<<"salt">>, Params),
     IterationCount = proplists:get_value(<<"iteration_count">>, Params, 4096),
     emqx_sasl_scram:add(Username, Password, Salt, IterationCount);
 do_add(_, _) ->
-    {error, unsupported_mechanism}.
-
-ensure_required_delete_params(Params) when is_list(Params) ->
-    case proplists:get_value(<<"mechanism">>, Params) of
-        undefined ->
-            {missing, missing_required_param};
-        Mechaism ->
-            ensure_required_delete_params(Mechaism, Params)
-    end.
-
-ensure_required_delete_params(<<"SCRAM-SHA-1">>, Params) ->
-    Required = [<<"username">>],
-    case erlang:map_size(maps:with(Required, maps:from_list(Params))) =:= erlang:length(Required) of
-        true -> ok;
-        false -> {missing, missing_required_param}
-    end;
-ensure_required_delete_params(_, _) ->
     {error, unsupported_mechanism}.
 
 do_delete(Params) ->
@@ -182,6 +198,19 @@ do_delete(<<"SCRAM-SHA-1">>, Params) ->
     Username = proplists:get_value(<<"username">>, Params),
     emqx_sasl_scram:delete(Username);
 do_delete(_, _) ->
+    {error, unsupported_mechanism}.
+
+do_update(Params) ->
+    Mechaism = proplists:get_value(<<"mechanism">>, Params),
+    do_update(Mechaism, Params).
+
+do_update(<<"SCRAM-SHA-1">>, Params) ->
+    Username = proplists:get_value(<<"username">>, Params),
+    Password = proplists:get_value(<<"password">>, Params),
+    Salt = proplists:get_value(<<"salt">>, Params),
+    IterationCount = proplists:get_value(<<"iteration_count">>, Params, 4096),
+    emqx_sasl_scram:update(Username, Password, Salt, IterationCount);
+do_update(_, _) ->
     {error, unsupported_mechanism}.
 
 pipeline([], _) ->
