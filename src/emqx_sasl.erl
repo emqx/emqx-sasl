@@ -16,10 +16,18 @@
 
 -module(emqx_sasl).
 
--export([ init/0
+-export([ load/0
+        , unload/0
+        , init/0
         , check/3
         , supported/0
         ]).
+
+load() ->
+    emqx:hook('client.enhanced_authenticate', fun ?MODULE:check/3, []).
+
+unload() ->
+    emqx:unhook('client.enhanced_authenticate', fun ?MODULE:check/3).
 
 init() ->
     emqx_sasl_scram:init().

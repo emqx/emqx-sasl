@@ -30,11 +30,13 @@
 
 start(_Type, _Args) ->
     ok = emqx_sasl:init(),
+    emqx_sasl:load(),
     emqx_sasl_cli:load(),
     supervisor:start_link({local, ?MODULE}, ?MODULE, []).
 
 stop(_State) ->
-    emqx_sasl_cli:unload().
+    emqx_sasl_cli:unload(),
+    emqx_sasl:unload().
 
 %%--------------------------------------------------------------------
 %% Dummy supervisor
