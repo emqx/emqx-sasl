@@ -137,7 +137,7 @@ check_client_final(ClientFinal, #{client_first_without_header := ClientFirstWith
     ClientProof = base64:decode(proplists:get_value(proof, Attributes)),
     NewNonce = proplists:get_value(nonce, Attributes),
     Auth0 = io_lib:format("~s,~s,~s", [ClientFirstWithoutHeader, ServerFirst, ClientFinalWithoutProof]),
-    Auth = list_to_binary(Auth0),
+    Auth = iolist_to_binary(Auth0),
     ClientSignature = hmac(StoredKey, Auth),
     ClientKey = crypto:exor(ClientProof, ClientSignature),
     case NewNonce =:= OldNonce andalso crypto:hash(sha, ClientKey) =:= StoredKey of
