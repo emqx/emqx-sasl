@@ -38,7 +38,8 @@
 init() ->
     ok = ekka_mnesia:create_table(?SCRAM_AUTH_TAB, [
             {disc_copies, [node()]},
-            {attributes, record_info(fields, ?SCRAM_AUTH_TAB)}]),
+            {attributes, record_info(fields, ?SCRAM_AUTH_TAB)},
+            {storage_properties, [{ets, [{read_concurrency, true}]}]}]),
     ok = ekka_mnesia:copy_table(?SCRAM_AUTH_TAB, disc_copies).
 
 is_enabled() ->
