@@ -19,7 +19,6 @@
 -include("emqx_sasl.hrl").
 
 -export([ init/0
-        , is_enabled/0
         , add/3
         , add/4
         , update/4
@@ -41,9 +40,6 @@ init() ->
             {attributes, record_info(fields, ?SCRAM_AUTH_TAB)},
             {storage_properties, [{ets, [{read_concurrency, true}]}]}]),
     ok = ekka_mnesia:copy_table(?SCRAM_AUTH_TAB, disc_copies).
-
-is_enabled() ->
-    lists:member(?SCRAM_AUTH_TAB, mnesia:system_info(tables)).
 
 add(Username, Password, Salt) ->
     add(Username, Password, Salt, 4096).
