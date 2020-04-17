@@ -33,71 +33,50 @@ unload() ->
 cli(["scram", "add", Username, Password, Salt]) ->
     cli(["scram", "add", Username, Password, Salt, "4096"]);
 cli(["scram", "add", Username, Password, Salt, IterationCount]) ->
-    execute_when_enabled("scram", fun() ->
-        case emqx_sasl_scram:add(list_to_binary(Username),
-                                 list_to_binary(Password),
-                                 list_to_binary(Salt),
-                                 list_to_integer(IterationCount)) of
-            ok ->
-                emqx_ctl:print("Authentication information added successfully~n");
-            {error, already_existed} ->
-                emqx_ctl:print("Authentication information already exists~n")
-        end
-    end);
+    case emqx_sasl_scram:add(list_to_binary(Username),
+                                list_to_binary(Password),
+                                list_to_binary(Salt),
+                                list_to_integer(IterationCount)) of
+        ok ->
+            emqx_ctl:print("Authentication information added successfully~n");
+        {error, already_existed} ->
+            emqx_ctl:print("Authentication information already exists~n")
+    end;
 
 cli(["scram", "delete", Username0]) ->
     Username = list_to_binary(Username0),
-    execute_when_enabled("scram", fun() ->
-        ok = emqx_sasl_scram:delete(Username),
-        emqx_ctl:print("Authentication information deleted successfully~n")
-    end);
+    ok = emqx_sasl_scram:delete(Username),
+    emqx_ctl:print("Authentication information deleted successfully~n");
 
 cli(["scram", "update", Username, Password, Salt]) ->
     cli(["scram", "update", Username, Password, Salt, "4096"]); 
 cli(["scram", "update", Username, Password, Salt, IterationCount]) ->
-    execute_when_enabled("scram", fun() ->
-        case emqx_sasl_scram:update(list_to_binary(Username),
-                                    list_to_binary(Password),
-                                    list_to_binary(Salt),
-                                    list_to_integer(IterationCount)) of
-            ok ->
-                emqx_ctl:print("Authentication information updated successfully~n");
-            {error, not_found} ->
-                emqx_ctl:print("Authentication information not found~n")
-        end
-    end);
+    case emqx_sasl_scram:update(list_to_binary(Username),
+                                list_to_binary(Password),
+                                list_to_binary(Salt),
+                                list_to_integer(IterationCount)) of
+        ok ->
+            emqx_ctl:print("Authentication information updated successfully~n");
+        {error, not_found} ->
+            emqx_ctl:print("Authentication information not found~n")
+    end;
 
 cli(["scram", "lookup", Username0]) ->
     Username = list_to_binary(Username0),
-    execute_when_enabled("scram", fun() ->
-        case emqx_sasl_scram:lookup(Username) of
-            {ok, #{username := Username,
-                   stored_key := StoredKey,
-                   server_key := ServerKey,
-                   salt := Salt,
-                   iteration_count := IterationCount}} ->
-                emqx_ctl:print("Username: ~s, Stored Key: ~s, Server Key: ~s, Salt: ~s, Iteration Count: ~p~n",
-                                [Username, StoredKey, ServerKey, Salt, IterationCount]);
-            {error, not_found} ->
-                emqx_ctl:print("Authentication information not found~n")
-        end
-    end);
+    case emqx_sasl_scram:lookup(Username) of
+        {ok, #{username := Username,
+                stored_key := StoredKey,
+                server_key := ServerKey,
+                salt := Salt,
+                iteration_count := IterationCount}} ->
+            emqx_ctl:print("Username: ~s, Stored Key: ~s, Server Key: ~s, Salt: ~s, Iteration Count: ~p~n",
+                            [Username, StoredKey, ServerKey, Salt, IterationCount]);
+        {error, not_found} ->
+            emqx_ctl:print("Authentication information not found~n")
+    end;
 
 cli(_) ->
     emqx_ctl:usage([{"sasl scram add <Username> <Password> <Salt> [<IterationCount>]", "Add SCRAM-SHA-1 authentication information"},
                     {"sasl scram delete <Username>", "Delete SCRAM-SHA-1 authentication information"},
                     {"sasl scram update <Username> <Password> <Salt> [<IterationCount>]", "Update SCRAM-SHA-1 authentication information"},
                     {"sasl scram lookup <Username>", "Check if SCRAM-SHA-1 authentication information exists"}]).
-
-execute_when_enabled(Mechanism, Fun) ->
-    Enabled = case Mechanism of
-                  "scram" -> emqx_sasl_scram:is_enabled();
-                  _ -> false
-              end,
-    case Enabled of
-        true ->
-            Fun();
-        false ->
-            emqx_ctl:print("Please load ~p plugin first.~n", [?APP])
-    end.
-    
