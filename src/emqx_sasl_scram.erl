@@ -21,6 +21,7 @@
 -export([ init/0
         , add/3
         , add/4
+        , update/3
         , update/4
         , delete/1
         , lookup/1
@@ -33,6 +34,11 @@
             salt,
             iteration_count :: integer()
         }).
+
+-ifdef(TEST).
+-compile(export_all).
+-compile(nowarn_export_all).
+-endif.
 
 init() ->
     ok = ekka_mnesia:create_table(?SCRAM_AUTH_TAB, [
@@ -51,6 +57,9 @@ add(Username, Password, Salt, IterationCount) ->
         _ ->
             {error, already_existed}
     end.
+
+update(Username, Password, Salt) ->
+    update(Username, Password, Salt, 4096).
 
 update(Username, Password, Salt, IterationCount) ->
     case lookup(Username) of
@@ -174,9 +183,9 @@ client_key(SaltedPassword) ->
 server_key(SaltedPassword) ->
     hmac(<<"Server Key">>, SaltedPassword).
 
-without_header(<<"n,,", ClientFirstWithoutHeader>>) ->
+without_header(<<"n,,", ClientFirstWithoutHeader/binary>>) ->
     ClientFirstWithoutHeader;
-without_header(<<GS2CbindFlag:8/binary, _/binary>>) ->
+without_header(<<GS2CbindFlag:1/binary, _/binary>>) ->
     error({unsupported_gs2_cbind_flag, binary_to_atom(GS2CbindFlag, utf8)}).
 
 without_proof(ClientFinal) ->
@@ -185,14 +194,17 @@ without_proof(ClientFinal) ->
 
 parse(Message) ->
     Attributes = binary:split(Message, <<$,>>, [global, trim_all]),
-    lists:foldl(fun(<<Key:8/binary, "=", Value/binary>>, Acc) ->
+    lists:foldl(fun(<<Key:1/binary, "=", Value/binary>>, Acc) ->
                     [{to_long(Key), Value} | Acc]
                 end, [], Attributes).
 
 serialize(Attributes) ->
-    lists:foldl(fun({Key, Value}, Acc) ->
-                    [to_short(Key), "=", to_list(Value) | Acc]
-                end, [], Attributes).
+    iolist_to_binary(
+        lists:foldl(fun({Key, Value}, []) ->
+                        [to_short(Key), "=", to_list(Value)];
+                       ({Key, Value}, Acc) ->
+                        Acc ++ [",", to_short(Key), "=", to_list(Value)]
+                     end, [], Attributes)).
 
 to_long(<<"a">>) ->
     authzid;
@@ -218,7 +230,7 @@ to_short(authzid) ->
 to_short(channel_binding) ->
     "c";
 to_short(username) ->
-    "c";
+    "n";
 to_short(proof) ->
     "p";
 to_short(nonce) ->
