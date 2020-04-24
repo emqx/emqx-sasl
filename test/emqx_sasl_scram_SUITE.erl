@@ -76,4 +76,4 @@ t_scram(_) ->
 
     {ok, {ok, ServerFinal, #{}}} = emqx_sasl:check(AuthMethod, ClientFinal, Cache),
 
-    {ok, {ok, #{}, #{}}} = emqx_sasl:check(AuthMethod, ServerFinal, ClientCache).
+    {ok, _} = emqx_sasl:check(AuthMethod, ServerFinal, ClientCache).
