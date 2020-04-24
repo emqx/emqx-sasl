@@ -107,7 +107,7 @@ ret({aborted, Error}) -> {error, Error}.
 check(Data, Cache) when map_size(Cache) =:= 0 ->
     check_client_first(Data);
 check(Data, Cache) ->
-    case maps:get(next_setup, Cache, undefined) of
+    case maps:get(next_step, Cache, undefined) of
         undefined -> check_server_first(Data, Cache);
         check_client_final -> check_client_final(Data, Cache);
         check_server_final -> check_server_final(Data, Cache)
@@ -131,7 +131,7 @@ check_client_first(ClientFirst) ->
             ServerNonce = nonce(),
             Nonce = list_to_binary(binary_to_list(ClientNonce) ++ binary_to_list(ServerNonce)),
             ServerFirst = make_server_first(Nonce, Salt, IterationCount),
-            {continue, ServerFirst, #{next_setup => check_client_final,
+            {continue, ServerFirst, #{next_step => check_client_final,
                                       client_first_without_header => ClientFirstWithoutHeader,
                                       server_first => ServerFirst,
                                       stored_key => StoredKey,
@@ -161,7 +161,8 @@ check_client_final(ClientFinal, #{client_first_without_header := ClientFirstWith
             {stop, invalid_client_final}
     end.
 
-check_server_first(ServerFirst, #{password := Password, client_first := ClientFirst}) ->
+check_server_first(ServerFirst, #{password := Password,
+                                  client_first := ClientFirst}) ->
     Attributes = parse(ServerFirst),
     Nonce = proplists:get_value(nonce, Attributes),
     ClientFirstWithoutHeader = without_header(ClientFirst),
@@ -175,17 +176,16 @@ check_server_first(ServerFirst, #{password := Password, client_first := ClientFi
     ClientSignature = hmac(StoredKey, Auth),
     ClientProof = base64:encode(crypto:exor(ClientKey, ClientSignature)),
     ClientFinal = serialize([{channel_binding, <<"biws">>},
-                                             {nonce, Nonce},
-                                             {proof, ClientProof}]),
-    {continue, ClientFinal, #{next_setup => check_server_final,
+                             {nonce, Nonce},
+                             {proof, ClientProof}]),
+    {continue, ClientFinal, #{next_step => check_server_final,
                               password => Password,
                               client_first => ClientFirst,
                               server_first => ServerFirst}}.
 
 check_server_final(ServerFinal, #{password := Password,
                                   client_first := ClientFirst,
-                                  server_first := ServerFirst
-                                  }) ->
+                                  server_first := ServerFirst}) ->
     NewAttributes = parse(ServerFinal),
     Attributes = parse(ServerFirst),
     Nonce = proplists:get_value(nonce, Attributes),
@@ -199,7 +199,7 @@ check_server_final(ServerFinal, #{password := Password,
     ServerSignature = hmac(ServerKey, Auth),
     case base64:encode(ServerSignature) =:= proplists:get_value(verifier, NewAttributes) of
         true ->
-            {ok, #{}, #{}};
+            {ok, <<>>, #{}};
         false -> 
             {stop, invalid_server_final}
     end.
