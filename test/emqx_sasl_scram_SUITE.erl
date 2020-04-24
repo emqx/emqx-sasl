@@ -63,19 +63,17 @@ t_crud(_) ->
 t_scram(_) ->
     AuthMethod = <<"SCRAM-SHA-1">>,
     [AuthMethod] = emqx_sasl:supported(),
-    [AuthMethod] = emqtt_sasl:supported(),
 
     Username = <<"test">>,
     Password = <<"public">>,
     Salt = <<"emqx">>,
-    ok = emqtt_sasl:add(Username, Password, Salt),
-    ClientFirst = emqtt_sasl:make_client_first(Username),
+    ok = emqx_sasl_scram:add(Username, Password, Salt),
+    ClientFirst = emqx_sasl_scram:make_client_first(Username),
 
-    io:format("ClientFirst: ~p~n", [ClientFirst]),
     {ok, {continue, ServerFirst, Cache}} = emqx_sasl:check(AuthMethod, ClientFirst, #{}),
 
-    {continue, ClientFinal, ClientCache} = emqtt_sasl:check(AuthMethod, ServerFirst, #{password => Password, client_first => ClientFirst}),
+    {ok, {continue, ClientFinal, ClientCache}} = emqx_sasl:check(AuthMethod, ServerFirst, #{password => Password, client_first => ClientFirst}),
 
     {ok, {ok, ServerFinal, #{}}} = emqx_sasl:check(AuthMethod, ClientFinal, Cache),
 
-    ?assertEqual(true, emqtt_sasl:check(AuthMethod, ServerFinal, ClientCache)).
+    {ok, {ok, #{}, #{}}} = emqx_sasl:check(AuthMethod, ServerFinal, ClientCache).
