@@ -25,16 +25,8 @@
         , update/4
         , delete/1
         , lookup/1
-        , check/2]).
-
--export([ nonce/0
-        , parse/1
-        , without_header/1
-        , serialize/1
-        , pbkdf2_sha_1/3
-        , client_key/1
-        , server_key/1
-        , hmac/2]).
+        , check/2
+        , make_client_first/1]).
 
 -record(?SCRAM_AUTH_TAB, {
             username,
@@ -113,14 +105,12 @@ ret({atomic, ok})     -> ok;
 ret({aborted, Error}) -> {error, Error}.
 
 check(Data, Cache) when map_size(Cache) =:= 0 ->
-    case check_client_first(Data) of
-        {error, not_found} -> {stop, {error, not_found}};
-        {continue, NAuthData, NCache} -> {ok, {continue, NAuthData, NCache}}
-    end;
+    check_client_first(Data);
 check(Data, Cache) ->
-    case check_client_final(Data, Cache) of
-        {error, invalid_client_final} -> {stop, {error, invalid_client_final}};
-        {ok, ServerFinal} -> {ok, {ok, ServerFinal, #{}}}
+    case maps:get(next_setup, Cache, undefined) of
+        undefined -> check_server_first(Data, Cache);
+        check_client_final -> check_client_final(Data, Cache);
+        check_server_final -> check_server_final(Data, Cache)
     end.
 
 check_client_first(ClientFirst) ->
@@ -130,7 +120,7 @@ check_client_first(ClientFirst) ->
     ClientNonce = proplists:get_value(nonce, Attributes),
     case lookup(Username) of
         {error, not_found} ->
-            {error, not_found};
+            {stop, not_found};
         {ok, #{stored_key := StoredKey0,
                server_key := ServerKey0,
                salt := Salt0,
@@ -141,7 +131,8 @@ check_client_first(ClientFirst) ->
             ServerNonce = nonce(),
             Nonce = list_to_binary(binary_to_list(ClientNonce) ++ binary_to_list(ServerNonce)),
             ServerFirst = make_server_first(Nonce, Salt, IterationCount),
-            {continue, ServerFirst, #{client_first_without_header => ClientFirstWithoutHeader,
+            {continue, ServerFirst, #{next_setup => check_client_final,
+                                      client_first_without_header => ClientFirstWithoutHeader,
                                       server_first => ServerFirst,
                                       stored_key => StoredKey,
                                       server_key => ServerKey,
@@ -165,10 +156,56 @@ check_client_final(ClientFinal, #{client_first_without_header := ClientFirstWith
         true ->
             ServerSignature = hmac(ServerKey, Auth),
             ServerFinal = make_server_final(ServerSignature),
-            {ok, ServerFinal};
+            {ok, ServerFinal, #{}};
         false ->
-            {error, invalid_client_final}
+            {stop, invalid_client_final}
     end.
+
+check_server_first(ServerFirst, #{password := Password, client_first := ClientFirst}) ->
+    Attributes = emqx_sasl_scram:parse(ServerFirst),
+    Nonce = proplists:get_value(nonce, Attributes),
+    ClientFirstWithoutHeader = emqx_sasl_scram:without_header(ClientFirst),
+    ClientFinalWithoutProof = emqx_sasl_scram:serialize([{channel_binding, <<"biws">>}, {nonce, Nonce}]),
+    Auth = list_to_binary(io_lib:format("~s,~s,~s", [ClientFirstWithoutHeader, ServerFirst, ClientFinalWithoutProof])),
+    Salt = base64:decode(proplists:get_value(salt, Attributes)),
+    IterationCount = binary_to_integer(proplists:get_value(iteration_count, Attributes)),
+    SaltedPassword = emqx_sasl_scram:pbkdf2_sha_1(Password, Salt, IterationCount),
+    ClientKey = emqx_sasl_scram:client_key(SaltedPassword),
+    StoredKey = crypto:hash(sha, ClientKey),
+    ClientSignature = emqx_sasl_scram:hmac(StoredKey, Auth),
+    ClientProof = base64:encode(crypto:exor(ClientKey, ClientSignature)),
+    ClientFinal = emqx_sasl_scram:serialize([{channel_binding, <<"biws">>},
+                                             {nonce, Nonce},
+                                             {proof, ClientProof}]),
+    {continue, ClientFinal, #{next_setup => check_server_final,
+                              password => Password,
+                              client_first => ClientFirst,
+                              server_first => ServerFirst}}.
+
+check_server_final(ServerFinal, #{password := Password,
+                                  client_first := ClientFirst,
+                                  server_first := ServerFirst
+                                  }) ->
+    NewAttributes = emqx_sasl_scram:parse(ServerFinal),
+    Attributes = emqx_sasl_scram:parse(ServerFirst),
+    Nonce = proplists:get_value(nonce, Attributes),
+    ClientFirstWithoutHeader = emqx_sasl_scram:without_header(ClientFirst),
+    ClientFinalWithoutProof = emqx_sasl_scram:serialize([{channel_binding, <<"biws">>}, {nonce, Nonce}]),
+    Auth = list_to_binary(io_lib:format("~s,~s,~s", [ClientFirstWithoutHeader, ServerFirst, ClientFinalWithoutProof])),
+    Salt = base64:decode(proplists:get_value(salt, Attributes)),
+    IterationCount = binary_to_integer(proplists:get_value(iteration_count, Attributes)),
+    SaltedPassword = emqx_sasl_scram:pbkdf2_sha_1(Password, Salt, IterationCount),
+    ServerKey = emqx_sasl_scram:server_key(SaltedPassword),
+    ServerSignature = emqx_sasl_scram:hmac(ServerKey, Auth),
+    case base64:encode(ServerSignature) =:= proplists:get_value(verifier, NewAttributes) of
+        true ->
+            {ok, #{}, #{}};
+        false -> 
+            {stop, invalid_server_final}
+    end.
+
+make_client_first(Username) ->
+    list_to_binary("n,," ++ binary_to_list(emqx_sasl_scram:serialize([{username, Username}, {nonce, emqx_sasl_scram:nonce()}]))).
 
 make_server_first(Nonce, Salt, IterationCount) ->
     serialize([{nonce, Nonce}, {salt, base64:encode(Salt)}, {iteration_count, IterationCount}]).
