@@ -41,7 +41,7 @@ check(Method, Data, Cache) ->
                 case emqx_sasl_scram:check(Data, Cache) of
                     {ok, NData, NCache} -> {ok, {ok, NData, NCache}};
                     {continue, NData, NCache} -> {ok, {continue, NData, NCache}};
-                    Re -> Re
+                    Re -> {stop, Re}
                 end;
             _ ->
                 {error, unsupported_mechanism}

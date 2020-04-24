@@ -120,7 +120,7 @@ check_client_first(ClientFirst) ->
     ClientNonce = proplists:get_value(nonce, Attributes),
     case lookup(Username) of
         {error, not_found} ->
-            {stop, not_found};
+            {error, not_found};
         {ok, #{stored_key := StoredKey0,
                server_key := ServerKey0,
                salt := Salt0,
@@ -158,7 +158,7 @@ check_client_final(ClientFinal, #{client_first_without_header := ClientFirstWith
             ServerFinal = make_server_final(ServerSignature),
             {ok, ServerFinal, #{}};
         false ->
-            {stop, invalid_client_final}
+            {error, invalid_client_final}
     end.
 
 check_server_first(ServerFirst, #{password := Password,
