@@ -61,32 +61,21 @@ t_crud(_) ->
     {error, not_found} = emqx_sasl_scram:lookup(Username).
 
 t_scram(_) ->
+    AuthMethod = <<"SCRAM-SHA-1">>,
+    [AuthMethod] = emqx_sasl:supported(),
+    [AuthMethod] = emqtt_sasl:supported(),
+
     Username = <<"test">>,
     Password = <<"public">>,
-    ok = emqx_sasl_scram:add(Username, Password, <<"emqx">>),
-    ClientFirst = make_client_first(Username),
-    io:format("ClientFirst: ~p~n", [ClientFirst]),
-    {continue, ServerFirst, Cache} = emqx_sasl_scram:check(ClientFirst, #{}),
-    Attributes = emqx_sasl_scram:parse(ServerFirst),
-    Nonce = proplists:get_value(nonce, Attributes),
-    ClientFirstWithoutHeader = emqx_sasl_scram:without_header(ClientFirst),
-    ClientFinalWithoutProof = emqx_sasl_scram:serialize([{channel_binding, <<"biws">>}, {nonce, Nonce}]),
-    Auth = list_to_binary(io_lib:format("~s,~s,~s", [ClientFirstWithoutHeader, ServerFirst, ClientFinalWithoutProof])),
-    Salt = base64:decode(proplists:get_value(salt, Attributes)),
-    IterationCount = binary_to_integer(proplists:get_value(iteration_count, Attributes)),
-    SaltedPassword = emqx_sasl_scram:pbkdf2_sha_1(Password, Salt, IterationCount),
-    ClientKey = emqx_sasl_scram:client_key(SaltedPassword),
-    StoredKey = crypto:hash(sha, ClientKey),
-    ClientSignature = emqx_sasl_scram:hmac(StoredKey, Auth),
-    ClientProof = base64:encode(crypto:exor(ClientKey, ClientSignature)),
-    ClientFinal = emqx_sasl_scram:serialize([{channel_binding, <<"biws">>},
-                                             {nonce, Nonce},
-                                             {proof, ClientProof}]),
-    {ok, ServerFinal} = emqx_sasl_scram:check(ClientFinal, Cache),
-    NewAttributes = emqx_sasl_scram:parse(ServerFinal),
-    ServerKey = emqx_sasl_scram:server_key(SaltedPassword),
-    ServerSignature = emqx_sasl_scram:hmac(ServerKey, Auth),
-    ?assertEqual(base64:encode(ServerSignature), proplists:get_value(verifier, NewAttributes)).
+    Salt = <<"emqx">>,
+    ok = emqtt_sasl:add(Username, Password, Salt),
+    ClientFirst = emqtt_sasl:make_client_first(Username),
 
-make_client_first(Username) ->
-    list_to_binary("n,," ++ binary_to_list(emqx_sasl_scram:serialize([{username, Username}, {nonce, emqx_sasl_scram:nonce()}]))).
+    io:format("ClientFirst: ~p~n", [ClientFirst]),
+    {ok, {continue, ServerFirst, Cache}} = emqx_sasl:check(AuthMethod, ClientFirst, #{}),
+
+    {continue, ClientFinal, ClientCache} = emqtt_sasl:check(AuthMethod, ServerFirst, #{password => Password, client_first => ClientFirst}),
+
+    {ok, {ok, ServerFinal, #{}}} = emqx_sasl:check(AuthMethod, ClientFinal, Cache),
+
+    ?assertEqual(true, emqtt_sasl:check(AuthMethod, ServerFinal, ClientCache)).
