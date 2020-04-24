@@ -27,6 +27,15 @@
         , lookup/1
         , check/2]).
 
+-export([ nonce/0
+        , parse/1
+        , without_header/1
+        , serialize/1
+        , pbkdf2_sha_1/3
+        , client_key/1
+        , server_key/1
+        , hmac/2]).
+
 -record(?SCRAM_AUTH_TAB, {
             username,
             stored_key,
@@ -104,9 +113,15 @@ ret({atomic, ok})     -> ok;
 ret({aborted, Error}) -> {error, Error}.
 
 check(Data, Cache) when map_size(Cache) =:= 0 ->
-    check_client_first(Data);
+    case check_client_first(Data) of
+        {error, not_found} -> {stop, {error, not_found}};
+        {continue, NAuthData, NCache} -> {ok, {continue, NAuthData, NCache}}
+    end;
 check(Data, Cache) ->
-    check_client_final(Data, Cache).
+    case check_client_final(Data, Cache) of
+        {error, invalid_client_final} -> {stop, {error, invalid_client_final}};
+        {ok, ServerFinal} -> {ok, {ok, ServerFinal, #{}}}
+    end.
 
 check_client_first(ClientFirst) ->
     ClientFirstWithoutHeader = without_header(ClientFirst),
