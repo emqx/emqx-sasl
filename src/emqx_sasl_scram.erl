@@ -21,10 +21,12 @@
 -export([ init/0
         , add/3
         , add/4
+        , update/3
         , update/4
         , delete/1
         , lookup/1
-        , check/2]).
+        , check/2
+        , make_client_first/1]).
 
 -record(?SCRAM_AUTH_TAB, {
             username,
@@ -33,6 +35,11 @@
             salt,
             iteration_count :: integer()
         }).
+
+-ifdef(TEST).
+-compile(export_all).
+-compile(nowarn_export_all).
+-endif.
 
 init() ->
     ok = ekka_mnesia:create_table(?SCRAM_AUTH_TAB, [
@@ -51,6 +58,9 @@ add(Username, Password, Salt, IterationCount) ->
         _ ->
             {error, already_existed}
     end.
+
+update(Username, Password, Salt) ->
+    update(Username, Password, Salt, 4096).
 
 update(Username, Password, Salt, IterationCount) ->
     case lookup(Username) of
@@ -97,7 +107,11 @@ ret({aborted, Error}) -> {error, Error}.
 check(Data, Cache) when map_size(Cache) =:= 0 ->
     check_client_first(Data);
 check(Data, Cache) ->
-    check_client_final(Data, Cache).
+    case maps:get(next_step, Cache, undefined) of
+        undefined -> check_server_first(Data, Cache);
+        check_client_final -> check_client_final(Data, Cache);
+        check_server_final -> check_server_final(Data, Cache)
+    end.
 
 check_client_first(ClientFirst) ->
     ClientFirstWithoutHeader = without_header(ClientFirst),
@@ -117,7 +131,8 @@ check_client_first(ClientFirst) ->
             ServerNonce = nonce(),
             Nonce = list_to_binary(binary_to_list(ClientNonce) ++ binary_to_list(ServerNonce)),
             ServerFirst = make_server_first(Nonce, Salt, IterationCount),
-            {continue, ServerFirst, #{client_first_without_header => ClientFirstWithoutHeader,
+            {continue, ServerFirst, #{next_step => check_client_final,
+                                      client_first_without_header => ClientFirstWithoutHeader,
                                       server_first => ServerFirst,
                                       stored_key => StoredKey,
                                       server_key => ServerKey,
@@ -141,10 +156,56 @@ check_client_final(ClientFinal, #{client_first_without_header := ClientFirstWith
         true ->
             ServerSignature = hmac(ServerKey, Auth),
             ServerFinal = make_server_final(ServerSignature),
-            {ok, ServerFinal};
+            {ok, ServerFinal, #{}};
         false ->
             {error, invalid_client_final}
     end.
+
+check_server_first(ServerFirst, #{password := Password,
+                                  client_first := ClientFirst}) ->
+    Attributes = parse(ServerFirst),
+    Nonce = proplists:get_value(nonce, Attributes),
+    ClientFirstWithoutHeader = without_header(ClientFirst),
+    ClientFinalWithoutProof = serialize([{channel_binding, <<"biws">>}, {nonce, Nonce}]),
+    Auth = list_to_binary(io_lib:format("~s,~s,~s", [ClientFirstWithoutHeader, ServerFirst, ClientFinalWithoutProof])),
+    Salt = base64:decode(proplists:get_value(salt, Attributes)),
+    IterationCount = binary_to_integer(proplists:get_value(iteration_count, Attributes)),
+    SaltedPassword = pbkdf2_sha_1(Password, Salt, IterationCount),
+    ClientKey = client_key(SaltedPassword),
+    StoredKey = crypto:hash(sha, ClientKey),
+    ClientSignature = hmac(StoredKey, Auth),
+    ClientProof = base64:encode(crypto:exor(ClientKey, ClientSignature)),
+    ClientFinal = serialize([{channel_binding, <<"biws">>},
+                             {nonce, Nonce},
+                             {proof, ClientProof}]),
+    {continue, ClientFinal, #{next_step => check_server_final,
+                              password => Password,
+                              client_first => ClientFirst,
+                              server_first => ServerFirst}}.
+
+check_server_final(ServerFinal, #{password := Password,
+                                  client_first := ClientFirst,
+                                  server_first := ServerFirst}) ->
+    NewAttributes = parse(ServerFinal),
+    Attributes = parse(ServerFirst),
+    Nonce = proplists:get_value(nonce, Attributes),
+    ClientFirstWithoutHeader = without_header(ClientFirst),
+    ClientFinalWithoutProof = serialize([{channel_binding, <<"biws">>}, {nonce, Nonce}]),
+    Auth = list_to_binary(io_lib:format("~s,~s,~s", [ClientFirstWithoutHeader, ServerFirst, ClientFinalWithoutProof])),
+    Salt = base64:decode(proplists:get_value(salt, Attributes)),
+    IterationCount = binary_to_integer(proplists:get_value(iteration_count, Attributes)),
+    SaltedPassword = pbkdf2_sha_1(Password, Salt, IterationCount),
+    ServerKey = server_key(SaltedPassword),
+    ServerSignature = hmac(ServerKey, Auth),
+    case base64:encode(ServerSignature) =:= proplists:get_value(verifier, NewAttributes) of
+        true ->
+            {ok, <<>>, #{}};
+        false -> 
+            {stop, invalid_server_final}
+    end.
+
+make_client_first(Username) ->
+    list_to_binary("n,," ++ binary_to_list(serialize([{username, Username}, {nonce, nonce()}]))).
 
 make_server_first(Nonce, Salt, IterationCount) ->
     serialize([{nonce, Nonce}, {salt, base64:encode(Salt)}, {iteration_count, IterationCount}]).
@@ -174,9 +235,9 @@ client_key(SaltedPassword) ->
 server_key(SaltedPassword) ->
     hmac(<<"Server Key">>, SaltedPassword).
 
-without_header(<<"n,,", ClientFirstWithoutHeader>>) ->
+without_header(<<"n,,", ClientFirstWithoutHeader/binary>>) ->
     ClientFirstWithoutHeader;
-without_header(<<GS2CbindFlag:8/binary, _/binary>>) ->
+without_header(<<GS2CbindFlag:1/binary, _/binary>>) ->
     error({unsupported_gs2_cbind_flag, binary_to_atom(GS2CbindFlag, utf8)}).
 
 without_proof(ClientFinal) ->
@@ -185,14 +246,17 @@ without_proof(ClientFinal) ->
 
 parse(Message) ->
     Attributes = binary:split(Message, <<$,>>, [global, trim_all]),
-    lists:foldl(fun(<<Key:8/binary, "=", Value/binary>>, Acc) ->
+    lists:foldl(fun(<<Key:1/binary, "=", Value/binary>>, Acc) ->
                     [{to_long(Key), Value} | Acc]
                 end, [], Attributes).
 
 serialize(Attributes) ->
-    lists:foldl(fun({Key, Value}, Acc) ->
-                    [to_short(Key), "=", to_list(Value) | Acc]
-                end, [], Attributes).
+    iolist_to_binary(
+        lists:foldl(fun({Key, Value}, []) ->
+                        [to_short(Key), "=", to_list(Value)];
+                       ({Key, Value}, Acc) ->
+                        Acc ++ [",", to_short(Key), "=", to_list(Value)]
+                     end, [], Attributes)).
 
 to_long(<<"a">>) ->
     authzid;
@@ -218,7 +282,7 @@ to_short(authzid) ->
 to_short(channel_binding) ->
     "c";
 to_short(username) ->
-    "c";
+    "n";
 to_short(proof) ->
     "p";
 to_short(nonce) ->

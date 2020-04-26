@@ -16,6 +16,8 @@
 
 -module(emqx_sasl).
 
+-include_lib("emqx/include/logger.hrl").
+
 -export([ load/0
         , unload/0
         , init/0
@@ -33,11 +35,21 @@ init() ->
     emqx_sasl_scram:init().
 
 check(Method, Data, Cache) ->
-    case Method of
-        <<"SCRAM-SHA-1">> ->
-            emqx_sasl_scram:check(Data, Cache);
-        _ ->
-            {error, unsupported_mechanism}
+    try
+        case Method of
+            <<"SCRAM-SHA-1">> ->
+                case emqx_sasl_scram:check(Data, Cache) of
+                    {ok, NData, NCache} -> {ok, {ok, NData, NCache}};
+                    {continue, NData, NCache} -> {ok, {continue, NData, NCache}};
+                    Re -> {stop, Re}
+                end;
+            _ ->
+                {error, unsupported_mechanism}
+        end
+    catch
+        _Class:_Reason:Stack ->
+            ?LOG(error, "[emqx_sasl] authentication failed: ~0p", [Stack]),
+            {error, authentication_failed}
     end.
 
 supported() ->
