@@ -87,8 +87,8 @@ get(Bindings, Params) when is_list(Params) ->
 
 get(_Bindings, #{<<"mechanism">> := Mechanism0,
                  <<"username">> := Username0}) ->
-    Mechanism = http_uri:decode(Mechanism0),
-    Username = http_uri:decode(Username0),
+    Mechanism = urldecode(Mechanism0),
+    Username = urldecode(Username0),
     case Mechanism of
         <<"SCRAM-SHA-1">> ->
             case emqx_sasl_scram:lookup(Username) of
@@ -101,7 +101,7 @@ get(_Bindings, #{<<"mechanism">> := Mechanism0,
             return({error, unsupported_mechanism})
     end;
 get(_Bindings, #{<<"mechanism">> := Mechanism}) ->
-    case http_uri:decode(Mechanism) of
+    case urldecode(Mechanism) of
         <<"SCRAM-SHA-1">> ->
             Data = #{Mechanism => mnesia:dirty_all_keys(?SCRAM_AUTH_TAB)},
             return({ok, Data});
@@ -223,4 +223,11 @@ pipeline([Fun | More], Params) ->
             {error, Reason}
     end.
 
+-if(?OTP_RELEASE >= 23).
+urldecode(S) ->
+    [{R, _}] = uri_string:dissect_query(S), R.
+-else.
+urldecode(S) ->
+    http_uri:decode(S).
+-endif.
 
