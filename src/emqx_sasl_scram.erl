@@ -224,10 +224,17 @@ pbkdf2_sha_1(Password, Salt, IterationCount) ->
             error(Reason)
     end.
 
+-if(?OTP_RELEASE >= 23).
+hmac(Key, Data) ->
+    HMAC = crypto:mac_init(hmac, sha, Key),
+    HMAC1 = crypto:mac_update(HMAC, Data),
+    crypto:mac_final(HMAC1).
+-else.
 hmac(Key, Data) ->
     HMAC = crypto:hmac_init(sha, Key),
     HMAC1 = crypto:hmac_update(HMAC, Data),
     crypto:hmac_final(HMAC1).
+-endif.
 
 client_key(SaltedPassword) ->
     hmac(<<"Client Key">>, SaltedPassword).
